@@ -4,7 +4,7 @@ lua54 'yes'
 name 'agc-detective'
 author 'AGC'
 description 'Cross-framework persistent forensic investigation system'
-version '0.2.0'
+version '0.2.2'
 shared_scripts {'shared/config.lua'}
 client_scripts {'client/main.lua'}
 server_scripts {'@oxmysql/lib/MySQL.lua','server/main.lua'}

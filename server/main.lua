@@ -111,34 +111,78 @@ local function inventoryMode()
  if GetResourceState('qb-inventory')=='started' then return 'qb' end
  return 'virtual'
 end
-local function giveBag(src,eid,kind)
- local mode=inventoryMode(); local item=Config.ItemName
- local data={evidence_id=eid,kind=kind,label=('Evidence #%s'):format(eid)}
- if mode=='ox' then
-  local ok,result=pcall(function() return exports.ox_inventory:AddItem(src,item,1,data) end)
-  if ok and result then return 'ox' end
- elseif mode=='qb' then
-  local ok,result=pcall(function() return exports['qb-inventory']:AddItem(src,item,1,false,data,'agc-detective') end)
-  if ok and result then return 'qb' end
+-- v0.2.2: inventory bags are a consumable empty container. The collected item
+-- retains the same item name, but its info/metadata contains evidence_id.
+local collecting = {}
+local function findEmptyQB(src)
+ local player=exports['qb-core']:GetCoreObject().Functions.GetPlayer(src)
+ if not player then return nil end
+ for slot,item in pairs(player.PlayerData.items or {}) do
+  if item and item.name==Config.ItemName and not ((item.info or {}).evidence_id) then
+   return tonumber(item.slot) or tonumber(slot)
+  end
  end
- return 'virtual'
+end
+local function takeEmptyBag(src,mode)
+ if mode=='qb' then
+  local slot=findEmptyQB(src)
+  if not slot then return false,'You need an empty evidence bag' end
+  local ok,removed=pcall(function() return exports['qb-inventory']:RemoveItem(src,Config.ItemName,1,slot,'agc-detective:collect') end)
+  return ok and removed==true, 'Could not remove the empty evidence bag'
+ elseif mode=='ox' then
+  local slots=exports.ox_inventory:Search(src,'slots',Config.ItemName) or {}
+  for _,entry in pairs(slots) do
+   if not (entry.metadata or {}).evidence_id then
+    local ok,removed=pcall(function() return exports.ox_inventory:RemoveItem(src,Config.ItemName,1,nil,entry.slot) end)
+    return ok and removed==true,'Could not remove the empty evidence bag'
+   end
+  end
+  return false,'You need an empty evidence bag'
+ end
+ return not Config.RequirePhysicalBag,'Physical evidence inventory unavailable'
+end
+local function addBag(src,mode,metadata)
+ if mode=='qb' then
+  local ok,result=pcall(function() return exports['qb-inventory']:AddItem(src,Config.ItemName,1,false,metadata,'agc-detective:collect') end)
+  return ok and result==true
+ elseif mode=='ox' then
+  local ok,result=pcall(function() return exports.ox_inventory:AddItem(src,Config.ItemName,1,metadata) end)
+  return ok and result~=false and result~=nil
+ end
+ return true
+end
+local function restoreEmpty(src,mode)
+ if mode~='virtual' and not addBag(src,mode,{}) then
+  print(('[agc-detective] WARNING: failed to restore empty bag for player %s; manual reimbursement required'):format(src))
+  notify(src,'Inventory error: ask staff to restore your empty bag')
+ end
 end
 RegisterNetEvent('agc-detective:collect',function(id)
  local src=source; local ok,p=permitted(src); if not ok then return notify(src,'Police authorization required') end
  id=tonumber(id); if not id or id%1~=0 or id<1 then return end
- local rows=MySQL.query.await('SELECT id,kind,x,y,z,collected_by FROM agc_detective_evidence WHERE id=? LIMIT 1',{id})
- local e=rows and rows[1]; if not e or e.collected_by then return notify(src,'Evidence already collected') end
- if not near(src,e.x,e.y,e.z,Config.CollectionDistance) then return notify(src,'Move closer to the evidence') end
- local mode=giveBag(src,id,e.kind)
- if mode=='virtual' and Config.RequirePhysicalBag then return notify(src,'Evidence bag item missing or inventory full') end
- local changed=MySQL.update.await('UPDATE agc_detective_evidence SET collected_by=?,collected_at=NOW() WHERE id=? AND collected_by IS NULL',{p.id,id})
- if changed~=1 then
-  -- Race protection: do not create a second digital bag; any inventory item is non-authoritative.
-  return notify(src,'Evidence already claimed; discard duplicate physical item if present')
- end
- MySQL.insert.await('INSERT INTO agc_detective_bags (evidence_id,owner,inventory_mode) VALUES (?,?,?)',{id,p.id,mode})
- audit(id,p.id,'collected','Bag: '..mode)
- notify(src,('Collected evidence #%d (%s bag)'):format(id,mode)); sync()
+ if collecting[id] then return notify(src,'Evidence is already being collected') end
+ collecting[id]=true
+ local success,err=pcall(function()
+  local rows=MySQL.query.await('SELECT id,kind,x,y,z,collected_by FROM agc_detective_evidence WHERE id=? LIMIT 1',{id})
+  local e=rows and rows[1]; if not e or e.collected_by then return notify(src,'Evidence already collected') end
+  if not near(src,e.x,e.y,e.z,Config.CollectionDistance) then return notify(src,'Move closer to the evidence') end
+  local mode=inventoryMode()
+  local taken,reason=takeEmptyBag(src,mode)
+  if not taken then return notify(src,reason) end
+  local changed=MySQL.update.await('UPDATE agc_detective_evidence SET collected_by=?,collected_at=NOW() WHERE id=? AND collected_by IS NULL',{p.id,id})
+  if changed~=1 then restoreEmpty(src,mode); return notify(src,'Evidence already collected') end
+  local metadata={evidence_id=id,kind=e.kind,label=('Evidence #%d'):format(id),sealed=true}
+  if not addBag(src,mode,metadata) then
+   MySQL.update.await('UPDATE agc_detective_evidence SET collected_by=NULL,collected_at=NULL WHERE id=? AND collected_by=?',{id,p.id})
+   restoreEmpty(src,mode)
+   return notify(src,'Could not create sealed bag; collection canceled')
+  end
+  MySQL.insert.await('INSERT INTO agc_detective_bags (evidence_id,owner,inventory_mode) VALUES (?,?,?)',{id,p.id,mode})
+  audit(id,p.id,'collected','Bag: '..mode)
+  notify(src,('Collected evidence #%d (%s bag)'):format(id,mode)); sync()
+ end)
+ collecting[id]=nil
+ if not success then print('[agc-detective] Collection error: '..tostring(err)); notify(src,'Evidence collection failed; check server console') end
 end)
 local function dashboard(src)
  local ok=permitted(src); if not ok then return notify(src,'Police authorization required') end

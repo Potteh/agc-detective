@@ -1,3 +1,17 @@
+# AGC Detective v0.2.2 — qb-inventory evidence bag fix
+
+The previous v0.2.0 collection routine attempted to ADD a sealed bag but did not recognize or consume the empty bag already in inventory. This version checks item slots for an `agc_evidence_bag` without `info.evidence_id`, consumes exactly one, and creates a sealed bag with `info.evidence_id` metadata. It keeps the digital evidence database and cross-framework bridges.
+
+**qb-inventory:** Set `unique=true` for `agc_evidence_bag` in `qb-core/shared/items.lua` to preserve individual bag metadata; restart the server after modifying item definitions. Existing unsealed bags have no `evidence_id` and count as empty.
+
+**ox_inventory:** Empty bags have no `metadata.evidence_id`; sealed bags do. ESX Legacy can use ox_inventory or digital-only fallback. For digital-only collection set `Config.Inventory='virtual'` and `Config.RequirePhysicalBag=false`.
+
+**Installation:** Replace your current `agc-detective` folder, preserve custom config edits, then `restart agc-detective`. SQL tables are auto-created via oxmysql; no manual SQL import or data reset. Use `/detective` to verify records.
+
+**Testing:** Give yourself two empty bags; fire a weapon; collect one casing with E; confirm one empty bag consumed, one sealed bag received with evidence ID, and matching record in the dashboard. Repeat with a second casing. A sealed bag must not be accepted as an empty bag.
+
+**Caution:** Inventory and database writes are not one atomic transaction. The resource attempts compensation when an inventory call fails, but crashes between operations or exceptional database failures may require administrator reconciliation. Inventory transfer/drop does not update custody records. Live testing on QBCore, Qbox and ESX is still required.
+
 # AGC Detective v0.2.0 — DEVELOPMENT BUILD
 
 ## Install
