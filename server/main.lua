@@ -160,18 +160,49 @@ RegisterCommand('detectivebagdebug',function(src)
  print(('[agc-detective] bag debug player %s: %s'):format(src,msg))
  notify(src,msg)
 end,false)
+-- qb-inventory versions differ in how slots are stored and refreshed.
+-- Only use slotless removal if EVERY matching bag is empty, so a sealed
+-- evidence bag can never be consumed accidentally.
+local function qbBagSlots(src)
+ local player=exports['qb-core']:GetCoreObject().Functions.GetPlayer(src)
+ if not player then return {},false end
+ local slots,hasSealed={},false
+ local function scan(items)
+  if type(items)~='table' then return end
+  for k,item in pairs(items) do
+   if type(item)=='table' and item.name==Config.ItemName and tonumber(item.amount or item.count or 1)>0 then
+    if isEmptyBag(item) then
+     local slot=tonumber(item.slot) or tonumber(k)
+     if slot then slots[slot]=true end
+    else hasSealed=true end
+   end
+  end
+ end
+ local ok,current=pcall(function() return exports['qb-inventory']:GetInventory(src) end)
+ if ok and type(current)=='table' then scan(current.items or current) end
+ scan(player.PlayerData.items)
+ return slots,hasSealed
+end
 local function takeEmptyBag(src,mode)
  if mode=='qb' then
-  local slot,detail=findEmptyQB(src)
-  if not slot then print(('[agc-detective] QB bag lookup failed for %s: %s'):format(src,tostring(detail))); return false,'Empty bag not detected; run /detectivebagdebug' end
-  local ok,removed=pcall(function() return exports['qb-inventory']:RemoveItem(src,Config.ItemName,1,slot,'agc-detective:collect') end)
-  return ok and removed==true, 'Could not remove the empty evidence bag'
+  local slots,hasSealed=qbBagSlots(src)
+  for slot in pairs(slots) do
+   local ok,removed=pcall(function() return exports['qb-inventory']:RemoveItem(src,Config.ItemName,1,slot,'agc-detective:collect') end)
+   if ok and removed==true then return true end
+  end
+  -- Only safe when no sealed bag exists. qb-inventory can resolve the slot.
+  if not hasSealed then
+   local ok,removed=pcall(function() return exports['qb-inventory']:RemoveItem(src,Config.ItemName,1,false,'agc-detective:collect') end)
+   if ok and removed==true then return true end
+  end
+  print(('[agc-detective] Empty bag removal failed for %s (slots=%s, sealed=%s)'):format(src,json.encode(slots),tostring(hasSealed)))
+  return false,'Could not remove empty evidence bag; see server console'
  elseif mode=='ox' then
   local slots=exports.ox_inventory:Search(src,'slots',Config.ItemName) or {}
   for _,entry in pairs(slots) do
    if not (entry.metadata or {}).evidence_id then
     local ok,removed=pcall(function() return exports.ox_inventory:RemoveItem(src,Config.ItemName,1,nil,entry.slot) end)
-    return ok and removed==true,'Could not remove the empty evidence bag'
+    if ok and removed==true then return true end
    end
   end
   return false,'You need an empty evidence bag'
