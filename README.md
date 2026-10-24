@@ -51,3 +51,11 @@ Only trusted server resources should call these exports. Fingerprint/DNA signatu
 - NUI loads optional Google Fonts; falls back to Arial without internet.
 - Framework compatibility is implemented but **not live-tested** on QBCore, Qbox, or ESX Legacy deployments.
 - Database permissions must allow table creation. Tables are created on each startup if absent.
+
+
+## v0.2.3 qb-inventory diagnostics
+- More robust detection of empty evidence bags from current qb-inventory exports, cached slots, and QBCore player functions.
+- Run `/detectivebagdebug` in-game as an authorized police officer to see selected inventory mode and detected slot. The server console also logs this.
+- On QBCore, qb-inventory takes precedence when both inventory resources are started.
+- Existing database tables and records are untouched.
+- If the command still reports no empty slot, share the server console line, plus your qb-inventory version/fork.

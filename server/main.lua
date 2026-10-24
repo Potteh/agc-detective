@@ -107,6 +107,7 @@ exports('CreateDNASample',function(pos,identifier,description)
 end)
 local function inventoryMode()
  if Config.Inventory~='auto' then return Config.Inventory end
+ if Framework=='qb' and GetResourceState('qb-inventory')=='started' then return 'qb' end
  if GetResourceState('ox_inventory')=='started' then return 'ox' end
  if GetResourceState('qb-inventory')=='started' then return 'qb' end
  return 'virtual'
@@ -114,19 +115,55 @@ end
 -- v0.2.2: inventory bags are a consumable empty container. The collected item
 -- retains the same item name, but its info/metadata contains evidence_id.
 local collecting = {}
+local function isEmptyBag(item)
+ if type(item)~='table' or item.name~=Config.ItemName then return false end
+ local meta=item.info or item.metadata
+ if type(meta)=='string' then
+  local ok,decoded=pcall(json.decode,meta)
+  if ok then meta=decoded end
+ end
+ return type(meta)~='table' or meta.evidence_id==nil
+end
 local function findEmptyQB(src)
- local player=exports['qb-core']:GetCoreObject().Functions.GetPlayer(src)
- if not player then return nil end
- for slot,item in pairs(player.PlayerData.items or {}) do
-  if item and item.name==Config.ItemName and not ((item.info or {}).evidence_id) then
-   return tonumber(item.slot) or tonumber(slot)
+ local core=exports['qb-core']:GetCoreObject()
+ local player=core.Functions.GetPlayer(src)
+ if not player then return nil,'player not loaded' end
+ local items=player.PlayerData.items or {}
+ -- Use the current inventory export when available, not just cached PlayerData.
+ local ok,current=pcall(function() return exports['qb-inventory']:GetInventory(src) end)
+ if ok and type(current)=='table' then
+  if type(current.items)=='table' then current=current.items end
+  items=current
+ end
+ for key,item in pairs(items) do
+  if isEmptyBag(item) and tonumber(item.amount or item.count or 1)>0 then
+   local slot=tonumber(item.slot) or tonumber(key)
+   if slot then return slot end
   end
  end
+ -- Some qb-inventory versions expose the current item through GetItemByName.
+ local got,item=pcall(function() return exports['qb-inventory']:GetItemByName(src,Config.ItemName) end)
+ if got and isEmptyBag(item) then return tonumber(item.slot) end
+ if type(player.Functions.GetItemByName)=='function' then
+  local fallback=player.Functions.GetItemByName(Config.ItemName)
+  if isEmptyBag(fallback) then return tonumber(fallback.slot) end
+ end
+ return nil,('item not located (inventory export=%s, cached slots=%s)'):format(tostring(ok),tostring(#items))
 end
+RegisterCommand('detectivebagdebug',function(src)
+ if src==0 then print('[agc-detective] Run /detectivebagdebug in game') return end
+ local authorized=permitted(src)
+ if not authorized and not IsPlayerAceAllowed(src,Config.AdminAce) then return end
+ local mode=inventoryMode()
+ local slot,detail=findEmptyQB(src)
+ local msg=('Inventory=%s | item=%s | empty slot=%s | detail=%s'):format(mode,Config.ItemName,tostring(slot),tostring(detail or 'none'))
+ print(('[agc-detective] bag debug player %s: %s'):format(src,msg))
+ notify(src,msg)
+end,false)
 local function takeEmptyBag(src,mode)
  if mode=='qb' then
-  local slot=findEmptyQB(src)
-  if not slot then return false,'You need an empty evidence bag' end
+  local slot,detail=findEmptyQB(src)
+  if not slot then print(('[agc-detective] QB bag lookup failed for %s: %s'):format(src,tostring(detail))); return false,'Empty bag not detected; run /detectivebagdebug' end
   local ok,removed=pcall(function() return exports['qb-inventory']:RemoveItem(src,Config.ItemName,1,slot,'agc-detective:collect') end)
   return ok and removed==true, 'Could not remove the empty evidence bag'
  elseif mode=='ox' then
